@@ -54,3 +54,8 @@ dist/.env.local
 .env
 .env.local
 dist/.env.local
+
+# Secrets (do not track)
+.env
+.env.local
+dist/.env.local
