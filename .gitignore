@@ -1,0 +1,37 @@
+# OrbitSuite Core .gitignore (minimal, matches README constraints)
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build / dist artifacts
+build/
+dist/
+*.spec
+
+# Coverage / test artifacts
+.coverage
+.pytest_cache/
+
+# Local environment & secrets
+.env
+.env.local
+
+# Logs (stdout-only in Core; keep log file ignored)
+*.log
+orbitsuite.log
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

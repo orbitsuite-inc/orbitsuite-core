@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "original_code": "def hello()\n    print 'hello'",
+  "patched_code": "def hello()\n    print('hello')",
+  "fixes_applied": [
+    "Fixed basic syntax issues",
+    "Fixed operator spacing",
+    "Removed trailing whitespace",
+    "Fixed multiple blank lines"
+  ],
+  "patch_type": "auto",
+  "issues_detected": 4
+}
