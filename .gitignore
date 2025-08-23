@@ -39,3 +39,8 @@ Thumbs.db
 # Core: track dist artifacts
 !dist/
 !dist/**
+
+# Secrets (do not track)
+.env
+.env.local
+dist/.env.local
