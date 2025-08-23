@@ -35,3 +35,7 @@ orbitsuite.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Core: track dist artifacts
+!dist/
+!dist/**

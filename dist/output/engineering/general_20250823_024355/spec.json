@@ -1,0 +1,24 @@
+{
+  "project_name": null,
+  "project_type": "general",
+  "source": "synthesized",
+  "spec": {
+    "description": "Generate and build a simple calculator executable.",
+    "requirements": [
+      {
+        "requirement_id": "core_req_1",
+        "title": "Requirement 1",
+        "description": "Generate and build a simple calculator executable",
+        "type": "functional",
+        "priority": "medium"
+      }
+    ]
+  },
+  "derived_concerns": {
+    "scalability": [],
+    "security": [],
+    "reliability": [],
+    "maintainability": [],
+    "integration": []
+  }
+}
