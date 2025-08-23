@@ -169,7 +169,7 @@ def api_mode(port: int = 8000) -> None:
         <main class=\"wrap\">
             <div class=\"card\">
                 <label for=\"prompt\" class=\"muted\">Enter your request (natural language):</label>
-                <textarea id=\"prompt\" placeholder=\"e.g., Generate a Python function to check if a number is prime\"></textarea>
+                <textarea id=\"prompt\" placeholder=\"e.g., Build a FastAPI endpoint to create a user\"></textarea>
                 <div class=\"row\">
                     <button id=\"sendBtn\" onclick=\"sendRequest()\">Send</button>
                     <span class=\"muted\">POST /process · port {port}</span>

@@ -1,0 +1,79 @@
+{
+  "analysis_id": "core_analysis_20250823_010541",
+  "project_type": "web_application",
+  "requirements_count": 1,
+  "system_concerns": {
+    "scalability": [],
+    "security": [],
+    "reliability": [],
+    "maintainability": [],
+    "integration": []
+  },
+  "architecture_recommendation": {
+    "recommended_pattern": "monolithic",
+    "pattern_info": {
+      "description": "Single deployable unit architecture",
+      "benefits": [
+        "simplicity",
+        "easier_testing",
+        "single_deployment"
+      ],
+      "use_cases": [
+        "small_teams",
+        "simple_domains",
+        "rapid_prototyping"
+      ]
+    },
+    "reasoning": "Based on project type 'web_application' and identified concerns",
+    "basic_components": [
+      {
+        "component_id": "comp_1",
+        "name": "Frontend Application",
+        "description": "User interface and client-side logic",
+        "type": "ui",
+        "technologies": [
+          "React",
+          "Vue.js",
+          "Angular"
+        ]
+      },
+      {
+        "component_id": "comp_2",
+        "name": "Backend API",
+        "description": "Server-side logic and API endpoints",
+        "type": "api",
+        "technologies": [
+          "Node.js",
+          "Python FastAPI",
+          "Java Spring"
+        ]
+      },
+      {
+        "component_id": "comp_3",
+        "name": "Database",
+        "description": "Data storage and persistence",
+        "type": "database",
+        "technologies": [
+          "PostgreSQL",
+          "MongoDB",
+          "SQLite"
+        ]
+      }
+    ]
+  },
+  "next_steps": [
+    "requirements_analysis",
+    "basic_design"
+  ],
+  "analysis_timestamp": "2025-08-23T05:05:41.928565+00:00",
+  "license_tier": "open_core",
+  "input_trace": {
+    "project_name": null,
+    "received_keys": [
+      "command",
+      "description",
+      "project_type"
+    ]
+  },
+  "warning": "No spec provided; performed best-effort core analysis from defaults"
+}

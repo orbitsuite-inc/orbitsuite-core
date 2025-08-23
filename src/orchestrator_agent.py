@@ -48,6 +48,8 @@ class PipelineArtifacts(TypedDict, total=False):
     tester_artifact: str
     patcher_artifact: str
     final_output: str
+    executable_artifact: str
+    executable_note: str
 
 
 class PlanExecutionResult(TypedDict, total=False):
@@ -278,7 +280,7 @@ class OrchestratorAgent(BaseAgent):
                     # Aggregate final output artifact (code + patch info) to output/final directory
                     try:
                         from pathlib import Path
-                        import json, time, hashlib
+                        import json, time, hashlib, shutil
                         base_dir = Path.cwd()
                         if getattr(__import__('sys'), 'frozen', False):  # type: ignore[attr-defined]
                             # Mirror EngineerCore strategy (write alongside dist if in dist)
@@ -292,7 +294,7 @@ class OrchestratorAgent(BaseAgent):
                         # Ensure uniqueness with short hash
                         h = hashlib.sha1(desc.encode()).hexdigest()[:8]
                         stem = f"{stem}_{h}"
-                        final_payload = {
+                        final_payload: Dict[str, Any] = {
                             'task_id': task.get('task_id'),
                             'description': task.get('description'),
                             'code': code_text,
@@ -304,6 +306,93 @@ class OrchestratorAgent(BaseAgent):
                         with open(out_path, 'w', encoding='utf-8') as f:
                             json.dump(final_payload, f, indent=2)
                         pipeline_artifacts.setdefault('final_output', str(out_path))
+
+                        # Optional executable build: detect intent keywords
+                        want_exe = any(k in desc.lower() for k in (
+                            ' build an executable', 'executable', ' .exe', ' build exe', 'make an exe', 'windows binary', 'create exe'
+                        )) or any(k in desc.lower().split() for k in ('exe', 'executable'))
+                        if want_exe:
+                            exe_note: str | None = None
+                            try:
+                                # Only attempt if PyInstaller available (not typically inside frozen core executable)
+                                try:
+                                    from PyInstaller.__main__ import run as pyinstaller_run  # type: ignore
+                                except Exception:
+                                    pyinstaller_run = None  # type: ignore
+                                script_path = None
+                                # Attempt to locate generated code artifact path recorded earlier
+                                gen_path = pipeline_artifacts.get('codegen_artifact')
+                                if gen_path:
+                                    script_path = Path(gen_path)
+                                # Fallback: write code to a temp file if not found
+                                if not script_path or not script_path.exists():
+                                    script_path = final_dir / f"{stem}_app.py"
+                                    with open(script_path, 'w', encoding='utf-8') as sf:
+                                        sf.write(code_text)
+                                if pyinstaller_run is None:
+                                    exe_note = 'PyInstaller not bundled; skip build (install dev deps to enable)'
+                                else:
+                                    # Prepare isolated build dirs under output/final/_build_<stem>
+                                    build_root = final_dir / f"_build_{stem}"
+                                    dist_path = build_root / 'dist'
+                                    work_path = build_root / 'work'
+                                    spec_path = build_root / 'spec'
+                                    for p in (dist_path, work_path, spec_path):
+                                        p.mkdir(parents=True, exist_ok=True)
+                                    args = [
+                                        '--onefile',
+                                        '--noconfirm',
+                                        '--clean',
+                                        '--distpath', str(dist_path),
+                                        '--workpath', str(work_path),
+                                        '--specpath', str(spec_path),
+                                    ]
+                                    # GUI heuristic: if tkinter present, use windowed
+                                    if 'tkinter' in code_text:
+                                        args.append('--windowed')
+                                    args.append(str(script_path))
+                                    try:
+                                        import sys
+                                        exit_codes: list[int] = []
+                                        orig_exit = sys.exit
+                                        def _fake_exit(code: int = 0):
+                                            try:
+                                                exit_codes.append(int(code))
+                                            except Exception:
+                                                exit_codes.append(1)
+                                        sys.exit = _fake_exit  # type: ignore
+                                        try:
+                                            pyinstaller_run(args)  # type: ignore[misc]
+                                        finally:
+                                            sys.exit = orig_exit  # type: ignore
+                                        if exit_codes and exit_codes[0] != 0:
+                                            exe_note = f"PyInstaller non-zero exit code {exit_codes[0]}"
+                                    except Exception as pe:  # pragma: no cover
+                                        exe_note = f"PyInstaller run error: {pe}"  # noqa: E501
+                                    # Find built exe
+                                    exe_candidates = list(dist_path.glob('*.exe'))
+                                    if exe_candidates:
+                                        built_exe = exe_candidates[0]
+                                        target_exe = final_dir / f"{stem}.exe"
+                                        try:
+                                            shutil.copy2(built_exe, target_exe)
+                                            pipeline_artifacts.setdefault('executable_artifact', str(target_exe))
+                                            exe_note = f"Executable built: {target_exe.name}"
+                                        except Exception as copy_e:  # pragma: no cover
+                                            exe_note = f"Copy failed: {copy_e}"  # noqa: E501
+                                    else:
+                                        exe_note = 'PyInstaller run completed but no .exe produced'
+                            except Exception as build_e:  # pragma: no cover
+                                exe_note = f"Exe build error: {build_e}"  # noqa: E501
+                            if exe_note:
+                                # Append a small note file for transparency
+                                try:
+                                    note_file = final_dir / f"{stem}_exe_build.txt"
+                                    with open(note_file, 'w', encoding='utf-8') as nf:
+                                        nf.write(exe_note)
+                                    pipeline_artifacts.setdefault('executable_note', str(note_file))
+                                except Exception:
+                                    pass
                     except Exception:  # pragma: no cover
                         pass
                 except Exception as e:  # pragma: no cover
