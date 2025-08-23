@@ -376,6 +376,35 @@ This minimal version:
 - Limited workflow capabilities
 - No external integrations
 
+## Automatic Executable Artifact (Experimental)
+
+When a task description includes intent keywords requesting an executable (e.g. phrases containing "executable", "exe", "build an executable", "make an exe", "windows binary"), the orchestrator will attempt to produce a Windows `.exe` artifact **after** code generation, testing, and patching complete.
+
+How it works:
+- Trigger: Keyword detection on the original task description (case‑insensitive).
+- Prerequisite: `PyInstaller` must be importable in the current environment (Core does **not** bundle it inside the distributed binary). Install via: `pip install pyinstaller` during development.
+- Build Mode: One‑file build (`--onefile`) inside an isolated staging directory under `output/final/_build_<task_hash>/`.
+- Output Artifacts:
+  - `<stem>.json` – final pipeline JSON artifact (existing behavior).
+  - `<stem>.exe` – copied executable (if build succeeds).
+  - `<stem>_exe_build.txt` – note file summarizing build outcome / errors.
+  - `executable_artifact` & `executable_note` paths are added to the pipeline artifacts section of the orchestrator result.
+
+Verbose Logging:
+- Enable `ORBITSUITE_VERBOSE=1` to see `[Orchestrator][exe]` log lines indicating when a build is requested and the outcome note.
+
+Failure / Skip Scenarios:
+- If `PyInstaller` isn't installed, build is skipped with a note.
+- Non‑zero exit codes, missing produced binary, or copy failures are captured in the note file.
+
+Security Note:
+- Generated code is packaged as‑is; review before distributing. Core does not perform hardening, sandboxing, or signing.
+
+Size Expectations:
+- Typical one‑file PyInstaller output for a small script ranges ~8–12 MB on Windows with default settings.
+
+This feature is experimental and intentionally minimal—no custom spec merging, icon embedding, UPX compression toggles, or multi‑platform packaging. For advanced distribution workflows, integrate a dedicated build pipeline externally.
+
 # Upgrade to Pro / Enterprise
 
 ## Need reliability, governance, or privacy features? Pro/Enterprise adds:

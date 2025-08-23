@@ -14,6 +14,7 @@ from typing import (
 )
 
 from src.base_agent import BaseAgent
+from src.utils import is_verbose  # lightweight verbosity helper
 
 
 class Task(TypedDict, total=False):
@@ -312,6 +313,8 @@ class OrchestratorAgent(BaseAgent):
                             ' build an executable', 'executable', ' .exe', ' build exe', 'make an exe', 'windows binary', 'create exe'
                         )) or any(k in desc.lower().split() for k in ('exe', 'executable'))
                         if want_exe:
+                            if is_verbose():
+                                print(f"[Orchestrator][exe] Build requested for task '{desc[:50]}' (keywords detected)")
                             exe_note: str | None = None
                             try:
                                 # Only attempt if PyInstaller available (not typically inside frozen core executable)
@@ -391,6 +394,8 @@ class OrchestratorAgent(BaseAgent):
                                     with open(note_file, 'w', encoding='utf-8') as nf:
                                         nf.write(exe_note)
                                     pipeline_artifacts.setdefault('executable_note', str(note_file))
+                                    if is_verbose():
+                                        print(f"[Orchestrator][exe] {exe_note}")
                                 except Exception:
                                     pass
                     except Exception:  # pragma: no cover
