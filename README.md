@@ -1,4 +1,29 @@
-# OrbitSuite Core
+# OrbitS## Why OrbitSuite Core
+
+- **Minimal by design**: single‑shot task execution with a straightforward cont## What's in Core
+
+- **Supervisor**: basic process that starts the server and routes a task through the orchestrator.
+- **Orchestrator (Conductor)**: simple routing to agents with **per-task directory isolation**. **No fallbacks** or retries in Core.
+- **Agents**: `task_linguist`, `codegen`, `engineer` (Core), `tester`, `patcher`, `memory` (basic), and `llm` glu## Supported touch points (Core)
+
+Core is intentionally minimal. The surface below is stable for basic use:
+- **HTTP API**: `POST /process`, `POST /config/openai` (see "Minimal API").
+- **Configuration**: `.env` with `OPENAI_API_KEY`, `ORBITSUITE_LLM_SERVER_URL`, `DEMO_MODE_ENABLED`, `DEMO_RELAY_URL`, optional `DEMO_RELAY_AUTH`.
+- **LLM Adapters**: OpenAI and basic local server support. Advanced routing, retries/fallbacks, and GPU management are not available in Core.
+- **Task Isolation**: Automatic per-task directory creation with organized output structure.
+
+> Core does not include extensibility guidance for premium features. For those capabilities, upgrade to Pro/Enterprise.ask isolation**: each task creates its own directory (`/output/<task_slug>/`) with dedicated subdirectories for each agent (engineering/, codegen/, tests/, patches/, final/).
+- **LLM adapters**: OpenAI and basic local server support (Nemo, Ollama). Advanced routing and GPU management in Pro/Enterprise.
+- **Lightweight session memory**: short‑lived context for a single request/session.
+- **Simple web UI**: submit a task and view results.
+- **Stdout only**: no logging subsystem, retries, fallbacks, or rotation in Core.
+
+> Core has **no** logging subsystem, retry logic, log rotation, webhooks, autosync, or advanced local model management. **Composable agents**: Task Linguist → CodeGen → Engineer → Tester → Patcher → Memory (basic).
+- **Fast start**: OpenAI‑only or local LLM server; no GPU setup required. Two demo calls via relay, then paste your key or configure local server.
+- **Task isolation**: each task gets its own directory structure preventing output conflicts.
+- **Clear upgrade path**: when you need advanced memory, logging, retries, advanced routing/fallbacks, or fleet orchestration, Pro/Enterprise unlocks it without changing your workflows.
+
+> Core intentionally omits logging systems, retries, fallbacks, log rotation, webhooks, autosync, and advanced local LLM management. It's a starter experience.e
 
 Open-core agentic runtime for software development automation. Supervisor → Orchestrator → Agents. **OpenAI-only** in Core with a **fixed 2‑call demo** via a small relay, then bring your own OpenAI API key. Lightweight session memory, clean APIs, and a minimal web UI to run tasks end‑to‑end.
 
@@ -23,18 +48,22 @@ Open-core agentic runtime for software development automation. Supervisor → Or
 
 1. Download the latest **Windows** release ZIP and extract it. You should see `OrbitSuiteCore.exe` and `.env.example` in the same folder.  
 2. Double‑click `OrbitSuiteCore.exe`. The app starts at **http://localhost:8000**.  
-3. You get **2 demo calls** if a relay is configured by the maintainer. After the cap, a popup asks for your `OPENAI_API_KEY`.  
-   - Paste your key in the popup **or** create a file named `.env` **next to the EXE** with:
+3. You get **2 demo calls** if a relay is configured by the maintainer. After the cap, a popup asks for your `OPENAI_API_KEY` or you can configure a local LLM server.  
+   - **Option A - OpenAI**: Paste your key in the popup **or** create a file named `.env` **next to the EXE** with:
      ```ini
      OPENAI_API_KEY=sk-...
      ```
-   - Restart the app. Calls now go directly to OpenAI.
+   - **Option B - Local LLM**: Configure a local server (e.g., Nemo, Ollama) in `.env`:
+     ```ini
+     ORBITSUITE_LLM_SERVER_URL=http://127.0.0.1:8080
+     ```
+   - Restart the app. Calls now go directly to your configured provider.
 4. If Windows SmartScreen warns (unsigned binary), choose **More info → Run anyway**.  
    If Windows Firewall prompts, allow `localhost` access.
 
 > Notes  
 > • The demo cap is fixed at **2** in Core.  
-> • Core is **OpenAI‑only**. Local LLMs, webhooks, autosync, logging subsystems, retries, and fallbacks are **not** included in Core.
+> • Core supports **OpenAI** and **local LLM servers** (Nemo, Ollama, etc.). Advanced local model management, GPU tuning, and multi-model routing are in Pro/Enterprise editions.
 
 ### Maintainers: optional demo relay
 
@@ -63,6 +92,21 @@ pip install -U pip -r requirements.txt
 cp .env.example .env
 python -m orbitsuite.server.serve   # UI at http://localhost:8000
 ```
+
+### Optional Environment Flags (Core Engineering / Build)
+
+| Variable | Purpose | Typical Values | Notes |
+| -------- | ------- | -------------- | ----- |
+| `ORBITSUITE_NL_MODE` | Enables natural-language augmentation in `EngineerCore` (LLM extraction of requirements & file plans) | `0`, `1` | When `1/true`, the engineer attempts an LLM call (OpenAI only in Core) to enrich missing requirements/components. Safe to leave off for offline use. |
+| `ORBITSUITE_BUILD_PYTHON` | Path to an external Python interpreter with PyInstaller installed, used when the orchestrator tries to build an `.exe` while running from a frozen core binary | Absolute path to `python.exe` | Only consulted inside a frozen (`OrbitSuiteCore.exe`) run; avoids trying to bundle from inside an already-frozen interpreter. |
+
+Example (PowerShell):
+```pwsh
+$env:ORBITSUITE_NL_MODE=1
+$env:ORBITSUITE_BUILD_PYTHON="C:\\Python311\\python.exe"
+```
+
+If you request an executable build in a frozen environment without `ORBITSUITE_BUILD_PYTHON`, the orchestrator will log a note explaining how to supply it.
 
 ---
 
@@ -117,13 +161,14 @@ OrbitSuite is offered in three tiers. This repository contains only the Core (op
 | ------ | ---------------- | --- | ---------- |
 | Tagline | Minimal open foundation | Local models + reliability toolkit | Scale, governance & memory intelligence |
 | Routing | Direct dispatch (no retries/fallbacks) | Retries + fallback routing | Multi-node orchestration & queues
-| Models | OpenAI adapter only | Local adapters (llama.cpp / Ollama / HTTP) + router | All Pro + cost / policy enforcement |
+| Models | OpenAI + basic local server support | Advanced local adapters (llama.cpp / Ollama / HTTP) + router | All Pro + cost / policy enforcement |
+| Task Isolation | Per-task directories (/output/task_slug/) | Enhanced with session management | Full isolation + multi-tenant support |
 | Memory | Ephemeral in-process | Session extension helpers | Mnemonic Token System (multi-tier + vector recall) |
 | Architecture Agent | Basic pattern + few components | Detailed components & roadmap | Full design suite + risk & compliance hooks |
 | Logging / Observability | Stdout only (no subsystem) | Structured logs, rotation, basic metrics | Traces, dashboards, telemetry pipelines |
 | Security / Compliance | — | Basic hardening | Security Guard / Entropy / Sandbox, audit trails |
 | Governance | — | Basic license check | RBAC, entitlement gating, policy engine |
-| Orchestration | Single-process | Local workflow enhancements | Multi-node fleet, snapshots, webhooks, autosync (Git/Gist) |
+| Orchestration | Single-process with task isolation | Local workflow enhancements | Multi-node fleet, snapshots, webhooks, autosync (Git/Gist) |
 | Support | Community | Email support | SLA, onboarding, long-term maintenance |
 
 See `UPGRADE.md` for concise migration steps and `TIERS.md` for a more detailed breakdown.
@@ -182,9 +227,11 @@ Code repair and modification:
 ### OrchestratorAgent
 Task coordination and workflow management:
 - Task routing to appropriate agents
-- Execution plan creation
+- **Per-task directory isolation** with unique task slugs
+- Execution plan creation with task-specific output paths
 - Workflow dependency analysis
 - Agent registration and delegation
+- Automatic directory structure creation (`engineering/`, `codegen/`, `tests/`, `patches/`, `final/`)
 
 ### Supervisor
 Main coordination layer:
@@ -193,10 +240,38 @@ Main coordination layer:
 - Health monitoring
 - Task history and logging
 
+## Task Isolation & Output Structure
+
+Each task automatically creates an isolated directory structure to prevent output conflicts:
+
+```
+output/
+├── task-description-words_hash123/
+│   ├── engineering/     # Engineer agent analysis & planning
+│   ├── codegen/         # Generated source code files
+│   ├── tests/           # Test results and validation
+│   ├── patches/         # Code fixes and improvements
+│   ├── final/           # Final artifacts and traceability
+│   └── tmpdist/         # Build artifacts (if applicable)
+└── another-task-name_hash456/
+    ├── engineering/
+    └── ...
+```
+
+**Benefits:**
+- **No conflicts**: Multiple tasks can run without overwriting each other's outputs
+- **Clean organization**: Each task's artifacts are self-contained
+- **Easy cleanup**: Remove entire task directories when no longer needed
+- **Traceability**: Clear mapping from task description to output location
+
+**Task Slug Generation:**
+- Uses description keywords + SHA1 hash for uniqueness
+- Example: `"create a calculator"` → `create-a-calculator_a1b2c3d4/`
+
 ## Features Removed (Minimal Version)
 
 To achieve bare minimum functionality, the following features were removed:
-- Local model integrations and multi-model routing (e.g., llama.cpp/Ollama); Core includes the OpenAI adapter only
+- Advanced local model integrations and multi-model routing (basic local server support included)
 - Database connections and persistence
 - Advanced memory systems
 - Complex workflow engines
@@ -205,6 +280,7 @@ To achieve bare minimum functionality, the following features were removed:
 - Complex configuration systems
 - Authentication and security layers
 - Advanced logging and telemetry
+- Multi-tenant task isolation (Core provides basic per-task directories)
 
 # OrbitSuite Tiers Detail
 
@@ -369,12 +445,13 @@ The minimal core has **no external dependencies** beyond Python standard library
 ## Limitations
 
 This minimal version:
-- Uses simple template-based code generation instead of LLM (Unless OpenAI API Key provided)
+- Uses simple template-based code generation instead of LLM (unless OpenAI API Key or local server provided)
 - Has basic keyword-based task parsing instead of advanced NLP
 - Stores memory in-process only (not persistent)
 - Has simplified error handling
 - Limited workflow capabilities
 - No external integrations
+- Basic local LLM server support (advanced routing and GPU management in Pro/Enterprise)
 
 ## Automatic Executable Artifact (Experimental)
 
@@ -403,7 +480,7 @@ Security Note:
 Size Expectations:
 - Typical one‑file PyInstaller output for a small script ranges ~8–12 MB on Windows with default settings.
 
-This feature is experimental and intentionally minimal—no custom spec merging, icon embedding, UPX compression toggles, or multi‑platform packaging. For advanced distribution workflows, integrate a dedicated build pipeline externally.
+This feature is experimental and intentionally minimal—no custom spec merging, icon embedding, UPX compression toggles, or multi‑platform packaging. For advanced distribution workflows, inquire about Pro/Enterprise. 
 
 # Upgrade to Pro / Enterprise
 
@@ -436,9 +513,11 @@ All configuration is via environment variables (see `.env.example`).
 | Variable | Default | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | empty | Your OpenAI key. When set, Core uses it and bypasses demo. |
+| `ORBITSUITE_LLM_SERVER_URL` | empty | Local LLM server URL (e.g., `http://127.0.0.1:8080`). When set, routes to local server instead of OpenAI. |
 | `DEMO_MODE_ENABLED` | `true` | Enable the demo path via relay. |
 | `DEMO_RELAY_URL` | `http://127.0.0.1:5057/v1/chat/completions` | OpenAI‑compatible relay endpoint (maintainer‑hosted). |
 | `DEMO_RELAY_AUTH` | empty | Optional shared secret header `X‑Orbit‑Demo` for relay. |
+| `ORBITSUITE_VERBOSE` | `0` | Set to `1` to enable verbose logging output. |
 
 ---
 
