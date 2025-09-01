@@ -121,7 +121,11 @@ class LLMAgent(BaseAgent):
                     return {"success": False, "error": "LLM prompt is empty"}
                 messages = [{"role": "user", "content": str(prompt)}]
         else:
-            messages = [{"role": "user", "content": str(input_data)}]
+            # Handle non-dict input (strings, etc.)
+            input_str = str(input_data).strip()
+            if not input_str:
+                return {"success": False, "error": "LLM prompt is empty"}
+            messages = [{"role": "user", "content": input_str}]
 
         if reset:
             self._messages = []

@@ -12,7 +12,7 @@ def test_codegen_pipeline_artifacts(tmp_path: Path, monkeypatch: Any) -> None:  
     result = resp.get("result")
     if isinstance(result, dict):
         inner = result.get("result") if isinstance(result.get("result"), dict) else result  # type: ignore[assignment]
-    pipeline_artifacts: Dict[str, Any] = inner.get("pipeline_artifacts", {}) if isinstance(inner, dict) else {}
+    pipeline_artifacts: Dict[str, Any] = inner.get("pipeline_artifacts", {})
     codegen_path = pipeline_artifacts.get("codegen_artifact")
     assert isinstance(codegen_path, str) and codegen_path, f"No codegen artifact recorded: {pipeline_artifacts}"
     assert Path(codegen_path).exists(), f"Codegen artifact file missing: {codegen_path}"

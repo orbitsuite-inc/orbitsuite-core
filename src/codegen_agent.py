@@ -1,256 +1,304 @@
-"""core/src/codegen_agent.py
-CodeGen Agent (Core edition) – OpenAI provider when configured, otherwise deterministic templates.
-Local model references (Nemo / llama.cpp) removed in Core.
+from __future__ import annotations
+
+"""Refactored CodeGen Agent (Core edition).
+
+Design goals:
+ - Separate LLM vs template logic cleanly
+ - Deterministic concise templates (removed large calculator blocks)
+ - Support for orchestrator-provided relative target path
+ - Stronger typing & small helpers
 """
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from typing import Dict, Any, Optional, TYPE_CHECKING, cast
+
+import hashlib, time
+from pathlib import Path
+from typing import Dict, Any, Optional, Protocol, runtime_checkable, cast
 
 from src.base_agent import BaseAgent
 
-LLMAgent = None  # Local LLMAgent disabled in Core (upgrade for local adapters)
-
-# Provider abstraction (OpenAI only in Core)
-try:
+# Try OpenAI provider; keep silent fallback
+try:  # pragma: no cover - env dependent
     from .llm_provider import get_provider_from_env  # type: ignore
 except Exception:  # pragma: no cover
-    try:
+    try:  # pragma: no cover
         from llm_provider import get_provider_from_env  # type: ignore
-    except Exception:
+    except Exception:  # pragma: no cover
         get_provider_from_env = None  # type: ignore
 
 
-class CodegenAgent(BaseAgent):
-    """Code generation using OpenAI when available; else template templates (no local LLM)."""
+from typing import TypedDict
 
+# Prefer the shared schema when available; otherwise provide a runtime stub.
+try:
+    from .orbit_types import CodegenResult  # type: ignore
+except Exception:  # pragma: no cover
+    class CodegenResult(TypedDict, total=False):
+        success: bool
+        code: str
+        language: str
+        prompt: str
+        method: str
+        llm_used: bool
+        artifact_path: str
+        artifact_write_error: str
+        target_rel_path: str
+
+
+@runtime_checkable
+class TemplateStrategy(Protocol):
+    language: str
+    def generate(self, prompt: str) -> str: ...  # pragma: no cover
+
+
+class PythonTemplateStrategy:
+    language = "python"
+    _HEADER = "# Generated Python code\n"
+    _PRIME_SNIPPET = (
+        "from math import isqrt\n\n"
+        "def is_prime(n: int) -> bool:\n"
+        "    if n < 2: return False\n"
+        "    if n % 2 == 0: return n == 2\n"
+        "    lim = isqrt(n); f = 3\n"
+        "    while f <= lim:\n"
+        "        if n % f == 0: return False\n"
+        "        f += 2\n"
+        "    return True\n\n"
+        "def primes_up_to(limit: int) -> list[int]:\n"
+        "    return [x for x in range(2, limit+1) if is_prime(x)]\n"
+    )
+
+    def generate(self, prompt: str) -> str:  # noqa: C901
+        p = prompt.lower()
+        if "fastapi" in p or "api" in p:
+            return (
+                "from fastapi import FastAPI\n\n"
+                "app = FastAPI()\n\n"
+                "@app.get('/')\n"
+                "def root(): return {'status':'ok'}\n"
+            )
+        if "prime" in p:
+            return self._HEADER + self._PRIME_SNIPPET + "\nif __name__=='__main__': print(primes_up_to(100))\n"
+        if any(k in p for k in ("test", "unittest")):
+            return (
+                "import unittest\n\n"
+                "class TestExample(unittest.TestCase):\n"
+                "    def test_truth(self): self.assertTrue(True)\n\n"
+                "if __name__=='__main__': unittest.main()\n"
+            )
+        if "class" in p:
+            return (
+                "class GeneratedClass:\n"
+                "    def __init__(self): self._ready = True\n\n"
+                "    def status(self) -> str: return 'ready'\n"
+            )
+        if "function" in p or "def" in p:
+            return (
+                "def generated_function(x):\n"
+                "    \"\"\"Generated function skeleton. Adjust as needed.\n\n"
+                "    Args:\n"
+                "        x: input value\n\n"
+                "    Returns:\n"
+                "        Any: processed value\n"
+                "    \"\"\"\n"
+                "    return x\n"
+            )
+        if "calculator" in p:
+            return (
+                "import ast, operator\n\n"
+                "OPS={ast.Add:operator.add,ast.Sub:operator.sub,ast.Mult:operator.mul,ast.Div:operator.truediv,ast.Pow:operator.pow}\n"
+                "def _eval(node):\n"
+                "    if isinstance(node, ast.Expression): return _eval(node.body)\n"
+                "    if isinstance(node, ast.Constant) and isinstance(node.value,(int,float)): return node.value\n"
+                "    if isinstance(node, ast.BinOp):\n"
+                "        t=type(node.op)\n"
+                "        if t in OPS: return OPS[t](_eval(node.left), _eval(node.right))\n"
+                "        raise ValueError('Unsupported operator')\n"
+                "    raise ValueError('Unsupported expression node')\n"
+                "def safe_eval(expr:str): return _eval(ast.parse(expr, mode='eval'))\n"
+                "def main():\n"
+                "    import sys; expr=' '.join(sys.argv[1:]) or '2+2'; print(safe_eval(expr))\n"
+                "if __name__=='__main__': main()\n"
+            )
+        return (
+            self._HEADER
+            + f"# Task: {prompt}\n\n"
+            + "def main():\n    print('Task placeholder')\n    return True\n\n"
+            + "if __name__=='__main__': main()\n"
+        )
+
+
+LANGUAGE_STRATEGIES: Dict[str, TemplateStrategy] = {
+    "python": PythonTemplateStrategy(),
+}
+
+
+class HtmlTemplateStrategy:
+    language = "html"
+    def generate(self, prompt: str) -> str:  # pragma: no cover - deterministic
+        title = "Landing Page"
+        if 'title' in prompt.lower():
+            # naive extraction
+            import re as _re
+            m = _re.search(r"title[:=]\s*([\w \-]{3,60})", prompt, flags=_re.I)
+            if m:
+                title = m.group(1).strip()
+        return (
+            f"<!DOCTYPE html>\n<html lang='en'>\n<head>\n  <meta charset='UTF-8'/>\n  <meta name='viewport' content='width=device-width,initial-scale=1'/>\n  <title>{title}</title>\n  <link rel='stylesheet' href='styles.css'/>\n</head>\n<body>\n  <header class='hero'>\n    <h1>{title}</h1>\n    <p class='tagline'>Generated static landing page shell.</p>\n    <button id='ctaBtn'>Get Started</button>\n  </header>\n  <main id='content'></main>\n  <script src='script.js'></script>\n</body>\n</html>\n"
+        )
+
+
+class CssTemplateStrategy:
+    language = "css"
+    def generate(self, prompt: str) -> str:  # pragma: no cover - deterministic
+        return (
+            "/* Basic responsive layout & gradient */\n"
+            ":root { --primary:#4b6ef5; --accent:#ff9966; --bg-gradient:linear-gradient(135deg,#141e30,#243b55); }\n"
+            "body { margin:0; font-family:system-ui,Arial,sans-serif; color:#f5f7fa; background:var(--bg-gradient); min-height:100vh; }\n"
+            ".hero { text-align:center; padding:12vh 2rem; }\n"
+            ".hero h1 { font-size:clamp(2.5rem,6vw,4rem); margin:.2em 0; }\n"
+            ".tagline { font-size:1.2rem; opacity:.85; }\n"
+            "#ctaBtn { background:var(--primary); color:#fff; border:none; padding:.9rem 1.6rem; border-radius:6px; font-size:1rem; cursor:pointer; box-shadow:0 4px 16px -4px #0008; transition:background .2s; }\n"
+            "#ctaBtn:hover { background:#3651c7; }\n"
+            "@media (max-width:700px){ .hero{padding:8vh 1.2rem;} }\n"
+        )
+
+
+class JsTemplateStrategy:
+    language = "javascript"
+    def generate(self, prompt: str) -> str:  # pragma: no cover - deterministic
+        return (
+            "// Basic interactive enhancements\n"
+            "document.addEventListener('DOMContentLoaded',()=>{\n"
+            "  const btn=document.getElementById('ctaBtn');\n"
+            "  if(btn){btn.addEventListener('click',()=>{\n"
+            "    const c=document.getElementById('content');\n"
+            "    if(c){c.innerHTML='<p>CTA clicked at '+new Date().toLocaleTimeString()+'</p>'; }\n"
+            "  });}\n"
+            "});\n"
+        )
+
+LANGUAGE_STRATEGIES.update({
+    'html': HtmlTemplateStrategy(),
+    'css': CssTemplateStrategy(),
+    'javascript': JsTemplateStrategy(),
+    'js': JsTemplateStrategy(),
+})
+
+_EXTENSIONS = {
+    "python": ".py",
+    "py": ".py",
+    "js": ".js",
+    "javascript": ".js",
+    "html": ".html",
+    "css": ".css",
+    "ts": ".ts",
+    "typescript": ".ts",
+    "go": ".go",
+}
+
+
+def _safe_stem(raw: str) -> str:
+    s = "_".join(raw.lower().split())[:48]
+    return s or hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+
+def _derive_filename(task_id: str, prompt: str, language: str) -> str:
+    base = task_id or prompt[:60] or f"snippet_{int(time.time())}"
+    stem = _safe_stem(base)
+    ext = _EXTENSIONS.get(language, f".{language}")
+    return f"{stem}{ext}"
+
+
+class CodegenAgent(BaseAgent):
     def __init__(self):
         super().__init__(name="codegen")
-        self.version = "openai-or-templates-1.0"
-        # Lazy-initialized LLM client (placeholder for upgrade editions)
-        if TYPE_CHECKING:
-            from .llm_agent import LLMAgent as LLMAgentType  # type: ignore
-            self._llm: Optional[LLMAgentType] = None
-        else:
-            self._llm: Optional[Any] = None
+        self.version = "refactored-1.2"
 
-    def _llm_available(self) -> bool:  # Always False: Core has no local LLM
-        return False
-
-    def run(self, input_data: Any) -> Dict[str, Any]:
-        """Generate code from a prompt/spec using LLM with safe fallback."""
+    def run(self, input_data: Any) -> CodegenResult:  # type: ignore[override]
         if not input_data:
-            return {"error": "Input required for code generation", "success": False}
+            return CodegenResult(success=False, code="", language="", prompt="", method="error", llm_used=False, artifact_path="")
 
-        # Normalize input
+        data: Dict[str, Any]
         if isinstance(input_data, dict):
             data = cast(Dict[str, Any], input_data)
-            prompt = str(data.get("prompt") or data.get("description") or "")
-            language = str(data.get("language") or "python").strip().lower()
-            task_id = str(data.get("task_id") or data.get("id") or "")
         else:
-            prompt = str(input_data)
-            language = "python"
-            task_id = ""
+            data = {"prompt": str(input_data)}
+
+        prompt = str(data.get("prompt") or data.get("description") or data.get("task") or "").strip()
+        language = str(data.get("language") or "python").lower().strip()
+        task_id = str(data.get("task_id") or data.get("id") or "").strip()
+        target_rel = str(data.get("target_rel_path") or data.get("target_path") or "").strip()
+        output_dir = data.get("output_dir")  # Can be None
 
         if not prompt:
-            return {"error": "No prompt provided", "success": False}
+            return CodegenResult(success=False, code="", language=language, prompt=prompt, method="error", llm_used=False, artifact_path="", artifact_write_error="empty_prompt")
 
-        # Core: Only OpenAI provider path (auto-detected). Local LLMAgent removed.
         llm_used = False
-        llm_output: Optional[str] = None
+        llm_code: Optional[str] = None
         if get_provider_from_env is not None:
-            try:
+            try:  # pragma: no cover - network
                 provider = get_provider_from_env()
                 messages = [
-                    {"role": "system", "content": f"You are a world-class code generator. Output ONLY {language} code. No explanations. No markdown."},
-                    {"role": "user", "content": f"Generate {language} code for the following requirement. Be concise, correct, and production-quality.\n\nRequirement:\n{prompt}"},
+                    {"role": "system", "content": f"You output ONLY valid {language} source code."},
+                    {"role": "user", "content": f"Generate {language} code for: {prompt}"},
                 ]
                 out_text = provider.generate(messages)
-                # Treat bracket-prefixed diagnostic messages as failure (e.g., [LLM disabled], [LLM HTTP 401])
                 if out_text and not out_text.lstrip().startswith("["):
                     llm_used = True
-                    llm_output = str(out_text).strip()
-            except Exception:
-                pass  # silent fallback to templates
+                    llm_code = self._strip_md_fence(out_text)
+            except Exception:  # silent fallback
+                pass
 
-        # Choose best output: prefer LLM if looks like code; else fallback template
-        code: str
-        method: str
-        if llm_used and llm_output:
-            code = self._postprocess_llm_output(llm_output, language)
+        if llm_used and llm_code:
+            code = self._minimal_postprocess(llm_code, language)
             method = "llm"
         else:
-            code = self._generate_code(prompt, language)
-            method = "template_based"
-        # Write artifact to disk (core output path)
-        try:
-            from pathlib import Path
-            import hashlib, time
-            base_dir = Path.cwd() / "output" / "codegen"
-            base_dir.mkdir(parents=True, exist_ok=True)
-            # Derive stable file stem
-            stem_source = task_id or prompt[:80]
-            if not stem_source:
-                stem_source = f"snippet_{int(time.time())}"
-            safe_stem = "_".join(stem_source.lower().split())[:40]
-            if not safe_stem:
-                safe_stem = hashlib.sha1(stem_source.encode()).hexdigest()[:12]
-            ext = {
-                "python": ".py",
-                "js": ".js",
-                "javascript": ".js",
-                "ts": ".ts",
-                "typescript": ".ts",
-                "go": ".go",
-            }.get(language, f".{language}")
-            file_path = base_dir / f"{safe_stem}{ext}"
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(code)
-            artifact_path = str(file_path)
-        except Exception as e:
-            artifact_path = ""
-            write_error = str(e)
-        else:
-            write_error = None
+            strategy = LANGUAGE_STRATEGIES.get(language) or LANGUAGE_STRATEGIES["python"]
+            code = strategy.generate(prompt)
+            method = "template"
 
-        return {
-            "success": True,
-            "code": code,
-            "language": language,
-            "prompt": prompt,
-            "method": method,
-            "llm_used": llm_used,
-            "artifact_path": artifact_path,
-            **({"artifact_write_error": write_error} if write_error else {}),
-        }
+        artifact_path, write_err = self._write_artifact(code, language, task_id, prompt, target_rel, output_dir)
 
-    def _postprocess_llm_output(self, text: str, language: str) -> str:
-        # Strip common markdown fences if any slipped through
+        return CodegenResult(
+            success=True,
+            code=code,
+            language=language,
+            prompt=prompt,
+            method=method,
+            llm_used=llm_used,
+            artifact_path=artifact_path,
+            **({"artifact_write_error": write_err} if write_err else {}),
+            **({"target_rel_path": target_rel} if target_rel else {}),
+        )
+
+    # Helpers
+    def _strip_md_fence(self, text: str) -> str:
         t = text.strip()
         if t.startswith("```"):
-            # Remove first fence line
             lines = t.splitlines()
-            # drop first line and possible trailing fence
             body = "\n".join(lines[1:])
             if body.rstrip().endswith("```"):
                 body = body.rsplit("```", 1)[0]
             t = body.strip()
-        # Ensure Python returns a sensible snippet if empty
-        if language.lower() == "python" and ("def " not in t and "class " not in t):
-            # wrap as a function to satisfy downstream expectations
-            t = f"""def generated_solution():\n    \"\"\"Generated code body.\n    Replace with an implementation for: {t or 'requested task'}\n    \"\"\"\n    pass\n"""
         return t
 
-    def _generate_code(self, prompt: str, language: str) -> str:
-        # Deterministic templates as fallback
-        prompt_lower = prompt.lower()
-        if language.lower() == "python":
-            return self._generate_python_code(prompt_lower)
-        return f"# Code generation for {language}\n# Task: {prompt}\n\n# TODO: Implement this functionality"
+    def _minimal_postprocess(self, code: str, language: str) -> str:
+        if language == "python" and not any(x in code for x in ("def ", "class ")):
+            return "def generated():\n    return None\n"
+        return code
 
-    def _generate_python_code(self, prompt: str) -> str:
-        # Specific implementations for common tasks
-        if "prime" in prompt:
-            return '''# Generated Python code: Prime number utilities
-from math import isqrt
-
-def is_prime(n: int) -> bool:
-    """Return True if n is a prime number (n >= 2)."""
-    if n < 2:
-        return False
-    if n % 2 == 0:
-        return n == 2
-    limit = isqrt(n)
-    f = 3
-    while f <= limit:
-        if n % f == 0:
-            return False
-        f += 2
-    return True
-
-def primes_up_to(limit: int) -> list[int]:
-    """Return a list of all prime numbers up to and including 'limit'."""
-    if limit < 2:
-        return []
-    primes = [2]
-    for x in range(3, limit + 1, 2):
-        if is_prime(x):
-            primes.append(x)
-    return primes
-
-if __name__ == "__main__":
-    # Example: print primes up to 1000
-    print(primes_up_to(1000))
-'''
-
-        if "function" in prompt or "def" in prompt:
-            return '''def example_function():
-    """
-    Generated function based on prompt.
-    """
-    # TODO: Implement function logic
-    pass
-    
-    return "result"'''
-
-        if "class" in prompt:
-            return '''class ExampleClass:
-    """
-    Generated class based on prompt.
-    """
-    
-    def __init__(self):
-      # TODO: Initialize class
-      pass
-    
-    def example_method(self):
-      # TODO: Implement method
-      return "result"'''
-
-        if "api" in prompt or "fastapi" in prompt:
-            return '''from fastapi import FastAPI
-
-app = FastAPI()
-
-@app.get("/")
-def read_root():
-    """Generated API endpoint."""
-    return {"message": "Hello World"}
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int):
-    """Generated API endpoint with parameter."""
-    return {"item_id": item_id}'''
-
-        if "test" in prompt:
-            return '''import unittest
-
-class TestExample(unittest.TestCase):
-    """Generated test class."""
-    
-    def test_example(self):
-        """Generated test method."""
-        # TODO: Implement test logic
-        self.assertTrue(True)
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        pass
-
-if __name__ == '__main__':
-    unittest.main()'''
-
-        return f'''# Generated Python code
-# Task: {prompt}
-
-def main():
-    """
-    Main function to accomplish the task.
-    """
-    # TODO: Implement the requested functionality
-    print("Task: {prompt}")
-    return True
-
-if __name__ == "__main__":
-    main()'''
+    def _write_artifact(self, code: str, language: str, task_id: str, prompt: str, target_rel: str, output_dir: Optional[str] = None) -> tuple[str, Optional[str]]:
+        if output_dir:
+            base_dir = Path(output_dir)
+        else:
+            base_dir = Path.cwd() / "output" / "codegen"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        if target_rel:
+            out_path = base_dir / target_rel
+        else:
+            out_path = base_dir / _derive_filename(task_id, prompt, language)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            out_path.write_text(code, encoding="utf-8")
+            return str(out_path), None
+        except Exception as e:  # pragma: no cover
+            return str(out_path), str(e)

@@ -15,11 +15,11 @@ class TaskLinguistAgent(TaskLinguistCore):
         # Maintain legacy name for display/logging consistency
         self.name = "task_linguist"
 
-    def run(self, input_data):  # type: ignore[override]
+    def run(self, input_data: str | dict[str, str]) -> any:  # type: ignore[override]
         # Allow legacy usage where a plain string prompt is passed
         if isinstance(input_data, str):
             input_data = {"command": "parse", "text": input_data}
-        elif isinstance(input_data, dict):
+        else:
             # ensure command defaults to parse so .get chain works
             input_data.setdefault("command", "parse")
             if "text" not in input_data and "prompt" in input_data:

@@ -199,7 +199,7 @@ class TaskLinguistCore(BaseAgent):
             base_task = self._create_core_task(text, intent, target_agent)
             
             # Generate core response
-            response = {
+            response: Dict[str, Any] = {
                 "success": True,
                 "core_mode": True,
                 "version": self.version,
@@ -322,7 +322,7 @@ class TaskLinguistCore(BaseAgent):
         Extract entities from text using basic pattern matching.
         Core functionality for open source users.
         """
-        entities = {}
+        entities: Dict[str, Any] = {}
         
         # File patterns - basic detection
         file_patterns = r'\b\w+\.\w+\b'
@@ -491,7 +491,8 @@ class TaskLinguistCore(BaseAgent):
         full_id = f"core_task_{short_id}"
 
         # Create core task structure
-        task = {
+        from typing import Dict, Any
+        task: Dict[str, Any] = {
             # Legacy / internal id
             "id": full_id,
             # Orchestrator-compatible identifiers
@@ -582,12 +583,12 @@ class TaskLinguistCore(BaseAgent):
         
         suggestions = [
             {
-                "agent_id": agent,
+                "agent_id": agent_name,
                 "score": score,
-                "capabilities": self.core_agent_capabilities[agent],
+                "capabilities": self.core_agent_capabilities[agent_name],
                 "confidence": min(score / 15.0, 1.0)  # Normalize to 0-1
             }
-            for agent, score in sorted_agents[:2]  # Top 2 suggestions for core
+            for agent_name, score in sorted_agents[:2]  # Top 2 suggestions for core
         ]
         
         return {
@@ -620,7 +621,8 @@ class TaskLinguistCore(BaseAgent):
             }
         
         # Basic validation checks
-        validation_issues: list[str] = []
+        from typing import List
+        validation_issues: List[str] = []
         score = 1.0
         
         # Priority validation
@@ -676,7 +678,8 @@ class TaskLinguistCore(BaseAgent):
             entities = self._extract_core_entities(prompt)
             
             # Generate core task
-            task = {
+            from typing import Dict, Any
+            task: Dict[str, Any] = {
                 "id": f"core_legacy_{uuid.uuid4().hex[:8]}",
                 "priority": self._estimate_core_priority(prompt, intent_type),
                 "depends_on": [],

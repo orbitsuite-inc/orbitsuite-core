@@ -61,6 +61,15 @@ db = ["psycopg2-binary", "redis"]
 pytest = "^7.0.0"
 pyinstaller = "^6.15.0"
 
+[tool.poetry.scripts]
+orbitsuite = "main:main"
+orbitsuite-core = "main:main"
+orbit-build = "scripts.build_all:main"
+
+[tool.poetry.plugins."orbitsuite.commands"]
+ship = "scripts.build_all:main"
+
+
 [build-system]
 requires = ["poetry-core>=1.6.0"]
 build-backend = "poetry.core.masonry.api"

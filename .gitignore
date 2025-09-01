@@ -50,6 +50,9 @@ dist/.env.local
 .env.local
 dist/.env.local
 
+# Generated artifacts (exclude runtime outputs)
+output/
+
 # Secrets (do not track)
 .env
 .env.local
