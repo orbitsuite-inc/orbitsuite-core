@@ -17,7 +17,7 @@ class PatcherAgent(BaseAgent):
         super().__init__(name="patcher")
         self.version = "minimal-1.0"
     
-    def run(self, input_data: Dict[str, Union[str, List[str]]]) -> Dict[str, Any]:
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply patches or fixes to code.
         """
@@ -33,6 +33,8 @@ class PatcherAgent(BaseAgent):
         if not isinstance(patch_type, str):
             return {"error": "Invalid type for 'type'. Expected a string.", "success": False}
 
+        output_dir = input_data.get("output_dir", "")
+
         # Apply patches based on type
         if patch_type == "syntax":
             result = self._fix_syntax_issues(code, issues)
@@ -46,7 +48,12 @@ class PatcherAgent(BaseAgent):
         try:
             from pathlib import Path
             import json, time
-            out_dir = Path.cwd() / "output" / "patches"
+            if output_dir:
+                # Use task-specific directory
+                out_dir = Path(output_dir) / "patches"
+            else:
+                # Fall back to default behavior
+                out_dir = Path.cwd() / "output" / "patches"
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = f"patch_{int(time.time())}"
             with open(out_dir / f"{stem}.json", "w", encoding="utf-8") as f:

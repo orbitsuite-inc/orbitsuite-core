@@ -13,9 +13,97 @@ import sys
 import json
 import time
 import os
+from typing import Any, Dict, TypeGuard
 from src.utils import load_dotenv, is_verbose, truncate_string
 load_dotenv()
+"""Hardcoded local LLM stub switch (temporary debug aid).
+
+Set ENABLE_LOCAL_LLM_STUB = True to force the offline LocalStubProvider
+without needing to export environment variables manually. This only
+applies when ORBITSUITE_LLM_PROVIDER is not already set externally.
+"""
+ENABLE_LOCAL_LLM_STUB = False  # flip to False to disable the local stub quickly
+_EXE_SUFFIX_PROMPT = ' and produce an executable exe'
+
+if ENABLE_LOCAL_LLM_STUB and not os.getenv("ORBITSUITE_LLM_PROVIDER"):
+    os.environ["ORBITSUITE_LLM_PROVIDER"] = "local"
+    # Optionally enable lightweight natural-language augmentation for engineer planning
+    os.environ.setdefault("ORBITSUITE_NL_MODE", "1")
+    # Provide a clear console notice (only once)
+    print("[main] LocalStubProvider enabled (set ORBITSUITE_LLM_PROVIDER or toggle ENABLE_LOCAL_LLM_STUB to change).")
+
+# Configure connection to local Nemo server
+if not os.getenv("ORBITSUITE_LLM_SERVER_URL"):
+    os.environ["ORBITSUITE_LLM_SERVER_URL"] = "http://172.23.80.1:8080"
+    print("[main] Connecting to local Nemo server at http://172.23.80.1:8080")
+
 from src.supervisor import Supervisor
+
+
+# --- Helper Utilities (extracted from duplicated inline logic) ---
+def _make_secondary_prompt(original: str) -> str:
+    """Ensure the secondary prompt requests an executable build.
+
+    Idempotent: if user already asked for an exe, returns original unchanged.
+    """
+    lower = original.lower()
+    if 'exe' in lower or 'executable' in lower:
+        return original
+    return original.rstrip('.') + _EXE_SUFFIX_PROMPT
+
+
+def _extract_pipeline_artifacts(result_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Navigate the nested supervisor -> orchestrator -> pipeline structure safely.
+
+    Expected nesting (when present):
+        { result: { result: { pipeline_artifacts: {...} } } }
+    Returns empty dict if any layer absent / malformed.
+    """
+    try:
+        lvl1 = result_dict.get('result')
+        if not isinstance(lvl1, dict):
+            return {}
+        from typing import cast
+        lvl1_dict = cast(Dict[str, Any], lvl1)
+        lvl2 = lvl1_dict.get('result')
+        if not isinstance(lvl2, dict):
+            return {}
+        lvl2_dict = cast(Dict[str, Any], lvl2)
+        pipe = lvl2_dict.get('pipeline_artifacts')
+        return cast(Dict[str, Any], pipe) if isinstance(pipe, dict) else {}
+    except Exception:  # pragma: no cover
+        return {}
+
+def _is_str_list(val: Any) -> TypeGuard[list[str]]:
+    if not isinstance(val, list):
+        return False
+    from typing import cast
+    val_list = cast(list[Any], val)
+    return all(isinstance(x, str) for x in val_list)
+
+
+def _build_autobuild_info(secondary_result: Dict[str, Any], secondary_prompt: str) -> Dict[str, Any]:
+    """Assemble the autobuild section for /process endpoint response."""
+    sec_pipe = _extract_pipeline_artifacts(secondary_result)
+    raw_gen = sec_pipe.get('generated_files')
+    if _is_str_list(raw_gen):
+        gen_preview = raw_gen[:10]
+    else:
+        gen_preview: list[str] = []
+    return {
+        'prompt_used': secondary_prompt,
+        'success': bool(secondary_result.get('success')),
+        'generated_files': gen_preview,
+        'executable': sec_pipe.get('executable_artifact'),
+        'final_output': sec_pipe.get('final_output'),
+        'task_slug': sec_pipe.get('task_slug'),
+        'task_dir': sec_pipe.get('task_dir'),
+        'build_log': sec_pipe.get('executable_build_log'),
+        'build_note': sec_pipe.get('executable_note') or sec_pipe.get('executable_note_text'),
+    }
+
+
+## _as_str_list helper removed (unused after refactor)
 
 
 def interactive_mode() -> None:
@@ -77,6 +165,10 @@ def interactive_mode() -> None:
                 else:
                     print(f"❌ Error: {result.get('error', 'Unknown error')}")
         except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+        except EOFError:
+            # Handle piped input gracefully
             print("\nGoodbye!")
             break
         except Exception as e:  # pragma: no cover
@@ -203,46 +295,124 @@ def api_mode(port: int = 8000) -> None:
                 self.wfile.write(b'Not Found')
         
         def do_POST(self):
-            if self.path == '/process':
-                content_length = int(self.headers['Content-Length'])
-                post_data = self.rfile.read(content_length)
-                
+            # Streaming endpoint
+            if self.path == '/process_stream':
                 try:
-                    start = time.time()
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length)
                     data = json.loads(post_data.decode())
                     request_text = data.get('request', '')
-                    
+                    if not request_text:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'text/plain')
+                        self.end_headers()
+                        self.wfile.write(b'Missing request')
+                        return
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/event-stream')
+                    self.send_header('Cache-Control', 'no-cache')
+                    self.end_headers()
+                    def sse(event: str, data_str: str):
+                        try:
+                            self.wfile.write(f"event: {event}\n".encode())
+                            self.wfile.write(f"data: {data_str}\n\n".encode())
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+                    sse('progress', json.dumps({'stage':'primary_start'}))
+                    step_events: list[dict[str, object]] = []
+                    def _progress(ev: dict[str, object]):
+                        # Forward immediately as SSE
+                        evt = {
+                            'event': ev.get('event'),
+                            'step': ev.get('step'),
+                            'action': ev.get('action'),
+                            'status': ev.get('status')
+                        }
+                        step_events.append(evt)
+                        try:
+                            sse('step', json.dumps(evt))
+                        except Exception:
+                            pass
+                    # Inject callback by wrapping request into dict for orchestrator path
+                    primary = supervisor.process_request({'description': request_text, '_progress_cb': _progress})
+                    sse('progress', json.dumps({'stage':'primary_done','success':primary.get('success', False)}))
+                    secondary_prompt = _make_secondary_prompt(request_text)
+                    sse('progress', json.dumps({'stage':'secondary_start','prompt':secondary_prompt[:80]}))
+                    secondary = supervisor.process_request({'description': secondary_prompt, '_progress_cb': _progress})
+                    sse('progress', json.dumps({'stage':'secondary_done','success':secondary.get('success', False)}))
+                    sec_pipe: Dict[str, Any] = _extract_pipeline_artifacts(secondary)
+                    final_payload: Dict[str, Any] = {
+                        'primary': primary.get('success'),
+                        'secondary': secondary.get('success'),
+                        'autobuild': {
+                            'prompt_used': secondary_prompt,
+                            'executable': sec_pipe.get('executable_artifact'),
+                            'final_output': sec_pipe.get('final_output'),
+                            'task_slug': sec_pipe.get('task_slug'),
+                            'task_dir': sec_pipe.get('task_dir'),
+                            'build_log': sec_pipe.get('executable_build_log'),
+                            'build_note': sec_pipe.get('executable_note') or sec_pipe.get('executable_note_text'),
+                        },
+                        'steps': step_events[-200:]
+                    }
+                    sse('result', json.dumps(final_payload))
+                except Exception as e:
+                    try:
+                        self.wfile.write(f"event: error\ndata: {json.dumps({'error':str(e)})}\n\n".encode())
+                    except Exception:
+                        pass
+                return
+            # Standard /process endpoint
+            if self.path == '/process':
+                content_length = int(self.headers.get('Content-Length','0'))
+                post_data = self.rfile.read(content_length) if content_length else b''
+                try:
+                    start = time.time()
+                    data = json.loads(post_data.decode() or '{}')
+                    request_text = data.get('request', '')
                     if not request_text:
                         self.send_response(400)
                         self.send_header('Content-Type', CONTENT_TYPE_JSON)
                         self.end_headers()
-                        error = {"error": "Missing 'request' field"}
-                        self.wfile.write(json.dumps(error).encode())
+                        self.wfile.write(json.dumps({'error':'Missing "request" field'}).encode())
                         return
-                    
                     if is_verbose():
-                        print(f"[HTTP] /process request: {truncate_string(request_text, 160)}")
+                        print(f"[HTTP] /process request: {truncate_string(request_text,160)}")
+                    progress: list[dict[str, str]] = []
+                    def _prog(stage: str, detail: str = ""):
+                        entry = {"stage": stage}
+                        if detail:
+                            entry["detail"] = detail[:160]
+                        progress.append(entry)
+                    # Run primary request synchronously and record its status
                     result = supervisor.process_request(request_text)
+                    _prog('primary_done', 'success' if result.get('success') else 'error')
+                    secondary_prompt = _make_secondary_prompt(request_text)
+                    _prog('secondary_start', secondary_prompt[:80])
+                    secondary_result = supervisor.process_request(secondary_prompt)
+                    _prog('secondary_done', 'success' if secondary_result.get('success') else 'error')
+                    sec_pipe: Dict[str, Any] = _extract_pipeline_artifacts(secondary_result)
+                    autobuild_info = _build_autobuild_info(secondary_result, secondary_prompt)
+                    result.setdefault('autobuild', autobuild_info)
+                    result['progress'] = progress
                     if is_verbose():
                         took = time.time() - start
-                        ok = result.get('success', False)
-                        print(f"[HTTP] /process response: success={ok} in {took:.2f}s")
-                    
+                        print(f"[HTTP] /process response in {took:.2f}s success={result.get('success')}")
                     self.send_response(200)
                     self.send_header('Content-Type', CONTENT_TYPE_JSON)
                     self.end_headers()
                     self.wfile.write(json.dumps(result, indent=2, default=str).encode())
-                
                 except Exception as e:
                     self.send_response(500)
                     self.send_header('Content-Type', CONTENT_TYPE_JSON)
                     self.end_headers()
-                    error = {"error": str(e)}
-                    self.wfile.write(json.dumps(error).encode())
-            else:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b'Not Found')
+                    self.wfile.write(json.dumps({'error': str(e)}).encode())
+                return
+            # Unknown path
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'Not Found')
     
     server = HTTPServer(('127.0.0.1', port), CoreHandler)
     print(f"Server running at http://localhost:{port}")
@@ -265,10 +435,17 @@ def main():
     mode_args: list[str] = []
     wait_seconds: int | None = None
     i = 0
+    autobuild = False
+    autobuild_prompt: str | None = None
     while i < len(args):
         a = args[i]
         if a in ("-v", "--verbose"):
             os.environ["ORBITSUITE_VERBOSE"] = "1"
+        elif a == "--autobuild":
+            autobuild = True
+        elif a.startswith("--autobuild-prompt="):
+            autobuild = True
+            autobuild_prompt = a.split("=",1)[1].strip() or None
         elif a.startswith("--wait="):
             val = a.split("=", 1)[1]
             try:
@@ -326,6 +503,32 @@ def main():
         api_mode(ui_port)
     else:
         interactive_mode()
+
+    # Optional post-run auto build (runs after interactive session exits or server mode returns)
+    if (autobuild or os.getenv('ORBITSUITE_AUTOBUILD') == '1') and not os.getenv('ORBITSUITE_AUTOBUILD_DONE'):
+        try:
+            os.environ['ORBITSUITE_AUTOBUILD_DONE'] = '1'  # prevent recursion if main re-entered
+            from src.supervisor import Supervisor as _Sup
+            sup = _Sup()
+            prompt = (autobuild_prompt or os.getenv('ORBITSUITE_AUTOBUILD_PROMPT') or
+                      'Create a simple Python calculator that prints results and produce an executable exe')
+            print(f"[autobuild] Processing request: {prompt[:120]}...")
+            res = sup.process_request(prompt)
+            pipe: Dict[str, Any] = _extract_pipeline_artifacts(res)
+            gen_files_raw: Any = pipe.get('generated_files')
+            gen_files: list[str] = []
+            if isinstance(gen_files_raw, list):
+                for _g in gen_files_raw:  # type: ignore[assignment]
+                    if isinstance(_g, (str, bytes)):
+                        gen_files.append(str(_g))
+            exe_path = pipe.get('executable_artifact') or pipe.get('final_output')
+            print('[autobuild] Generated files:', len(gen_files))
+            if isinstance(exe_path, str) and exe_path:
+                print('[autobuild] Executable:', exe_path)
+            else:
+                print('[autobuild] No executable produced in pipeline.')
+        except Exception as e:  # pragma: no cover
+            print(f"[autobuild] Error: {e}")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ class TesterAgentClass(BaseAgent):
         test_type: str = input_data.get("type", "code_validation") if isinstance(input_data, dict) else "code_validation"
         target: str = input_data.get("target", "") if isinstance(input_data, dict) else str(input_data)
         command: str = input_data.get("command", "") if isinstance(input_data, dict) else ""
+        output_dir: str = input_data.get("output_dir", "") if isinstance(input_data, dict) else ""
         
         # Execute appropriate test type
         if test_type == "command" and command:
@@ -45,7 +46,12 @@ class TesterAgentClass(BaseAgent):
         try:
             from pathlib import Path
             import json, time
-            out_dir = Path.cwd() / "output" / "tests"
+            if output_dir:
+                # Use task-specific directory
+                out_dir = Path(output_dir) / "tests"
+            else:
+                # Fall back to default behavior
+                out_dir = Path.cwd() / "output" / "tests"
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = f"test_{int(time.time())}"
             with open(out_dir / f"{stem}.json", "w", encoding="utf-8") as f:

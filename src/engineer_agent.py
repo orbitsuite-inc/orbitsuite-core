@@ -11,8 +11,8 @@ class EngineerAgent(EngineerCore):
     converting the async core run() into a synchronous call expected by dispatch.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, output_dir: str | None = None):
+        super().__init__(output_dir)
         self.name = "engineer"  # legacy display
 
     def run(self, input_data: Any):  # type: ignore[override]

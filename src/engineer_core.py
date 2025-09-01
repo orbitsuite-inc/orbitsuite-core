@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypedDict, cast
 
 from .base_agent import BaseAgent
 
@@ -36,21 +36,39 @@ class CoreArchitecturalComponent:
     technologies: List[str]
 
 
+class FilePlanEntry(TypedDict, total=False):
+    path: str
+    purpose: str
+    language: str
+
+
+PLAN_JSON = "plan.json"
+SPEC_JSON = "spec.json"
+DESIGN_JSON = "design.json"
+SUMMARY_JSON = "summary.json"
+SUMMARY_MD = "summary.md"
+
+
 class EngineerCore(BaseAgent):
-    def __init__(self) -> None:
+    def __init__(self, output_dir: str | None = None) -> None:
         super().__init__(name="engineer_core")
         self.description = "Open-source system architecture and design planning"
         self.version = "1.0.1"
         self.license_tier = "open_core"
         # When running frozen (PyInstaller), Path.cwd() points to the dist directory.
         # We want artifacts to land beside the executable in ./output rather than nested inside dist.
-        cwd = Path.cwd()
-        if getattr(__import__('sys'), 'frozen', False):  # type: ignore[attr-defined]
-            # For a frozen build, place artifacts one directory above if that directory exists
-            parent = cwd.parent if (cwd.name.lower() == 'dist' and cwd.parent.exists()) else cwd
-            self.engineering_root = parent / 'output' / 'engineering'
+        if output_dir:
+            # Use provided task-specific directory
+            self.engineering_root = Path(output_dir) / 'engineering'
         else:
-            self.engineering_root = cwd / 'output' / 'engineering'
+            # Fall back to default behavior for backward compatibility
+            cwd = Path.cwd()
+            if getattr(__import__('sys'), 'frozen', False):  # type: ignore[attr-defined]
+                # For a frozen build, place artifacts one directory above if that directory exists
+                parent = cwd.parent if (cwd.name.lower() == 'dist' and cwd.parent.exists()) else cwd
+                self.engineering_root = parent / 'output' / 'engineering'
+            else:
+                self.engineering_root = cwd / 'output' / 'engineering'
 
         self.core_design_patterns: Dict[str, Dict[str, Any]] = {
             "microservices": {
@@ -127,29 +145,67 @@ class EngineerCore(BaseAgent):
         # Accept legacy string usage and normalize
         if not isinstance(input_data, dict):  # type: ignore[truthy-bool]
             input_data = {"command": "analyze", "description": str(input_data)}  # type: ignore[assignment]
-        command = input_data.get("command", "analyze")
-        if command == "analyze":
-            return self._analyze_system_core(input_data)
-        if command == "requirements":
-            return self._analyze_requirements_core(input_data)
-        if command == "recommend_stack":
-            return self._recommend_core_technology_stack(input_data)
-        if command == "get_patterns":
-            return self._get_core_design_patterns(input_data)
-        if command == "plan_steps":
-            return self._generate_core_planning_steps(input_data)
-        if command == "status":
-            return self._get_core_status()
-        return {
-            "success": False,
-            "error": f"Unknown core engineering command: {command}",
-        }
+        
+        # Check for dynamic output directory override
+        original_engineering_root = self.engineering_root
+        output_dir = input_data.get("output_dir")
+        if output_dir:
+            self.engineering_root = Path(output_dir) / 'engineering'
+        
+        try:
+            command = input_data.get("command", "analyze")
+            if command == "analyze":
+                return self._analyze_system_core(input_data)
+            if command == "plan_files":
+                return self._plan_files_core(input_data)
+            if command == "requirements":
+                return self._analyze_requirements_core(input_data)
+            if command == "recommend_stack":
+                return self._recommend_core_technology_stack(input_data)
+            if command == "get_patterns":
+                return self._get_core_design_patterns(input_data)
+            if command == "plan_steps":
+                return self._generate_core_planning_steps(input_data)
+            if command == "status":
+                return self._get_core_status()
+            return {
+                "success": False,
+                "error": f"Unknown core engineering command: {command}",
+            }
+        finally:
+            # Always restore original engineering root
+            self.engineering_root = original_engineering_root
 
     def _analyze_system_core(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        # Accept empty or non-dict specs and synthesize a minimal one so we always produce artifacts
+        """Core system analysis with optional NL mode LLM augmentation."""
         raw_spec = input_data.get("spec", {})
-        spec: Dict[str, Any] = raw_spec if isinstance(raw_spec, dict) else {}
+        spec: Dict[str, Any] = cast(Dict[str, Any], raw_spec) if isinstance(raw_spec, dict) else {}
         project_type = input_data.get("project_type", "general")
+        nl_mode = bool(str(__import__('os').getenv('ORBITSUITE_NL_MODE', '0')) in ('1','true','True'))
+        # Optional: augment spec using LLM when enabled
+        if nl_mode and not spec.get('requirements'):
+            try:
+                from .llm_provider import get_provider_from_env  # type: ignore
+                provider = get_provider_from_env()
+                prompt_desc = input_data.get('description') or spec.get('description','')
+                if prompt_desc:
+                    messages = [
+                        {"role": "system", "content": "You extract structured software requirements."},
+                        {"role": "user", "content": f"Analyze this request and list functional requirements, non-functional requirements, and a short component breakdown as JSON with keys requirements, non_functional, components.\nRequest: {prompt_desc}"}
+                    ]
+                    llm_out = provider.generate(messages)
+                    if llm_out and llm_out.strip().startswith('{'):
+                        import json as _json
+                        try:
+                            parsed = _json.loads(llm_out)
+                            if isinstance(parsed, dict):
+                                spec.setdefault('requirements', parsed.get('requirements', []))  # type: ignore[arg-type]
+                                spec.setdefault('non_functional', parsed.get('non_functional', []))  # type: ignore[arg-type]
+                                spec.setdefault('components', parsed.get('components', []))  # type: ignore[arg-type]
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         synthesized = False
         if not spec:
@@ -198,7 +254,7 @@ class EngineerCore(BaseAgent):
 
         out_dir = self._ensure_engineering_dir(input_data.get("project_name") or project_type)
         # Prepare a minimal system spec artifact (engineer provides the spec when missing)
-        spec_artifact = {
+        spec_artifact: Dict[str, Any] = {
             "project_name": input_data.get("project_name"),
             "project_type": project_type,
             "source": "synthesized" if synthesized else "provided",
@@ -220,7 +276,7 @@ class EngineerCore(BaseAgent):
                 "testing_approach",
             ],
         )
-        plan_artifact = {
+        plan_artifact: Dict[str, Any] = {
             "project_name": input_data.get("project_name"),
             "project_type": project_type,
             "steps": plan_steps,
@@ -233,20 +289,34 @@ class EngineerCore(BaseAgent):
             },
         }
 
-        files_written = self._write_artifacts(
-            out_dir,
-            {
-                "summary.json": analysis_result,
-                "summary.md": self._render_summary_md(analysis_result),
-                "spec.json": spec_artifact,
-                "plan.json": plan_artifact,
-            },
-        )
+        # Design artifact (lightweight) capturing architecture recommendation & components
+        design_artifact: Dict[str, Any] = {
+            "project_name": input_data.get("project_name"),
+            "project_type": project_type,
+            "architecture": architecture_recommendation,
+            "created": datetime.now(timezone.utc).isoformat(),
+        }
+
+        files_payload: Dict[str, Any] = {
+            SUMMARY_JSON: analysis_result,
+            SUMMARY_MD: self._render_summary_md(analysis_result),
+            SPEC_JSON: spec_artifact,
+            PLAN_JSON: plan_artifact,
+            DESIGN_JSON: design_artifact,
+        }
+        files_written = self._write_artifacts(out_dir, files_payload)
+        # Provide direct lookup paths for orchestrator artifact propagation
+        spec_path = str(out_dir / SPEC_JSON)
+        plan_path = str(out_dir / PLAN_JSON)
+        design_path = str(out_dir / DESIGN_JSON)
         return {
             "success": True,
             "core_analysis": analysis_result,
             "artifact_dir": str(out_dir),
             "files_written": files_written,
+            "spec_path": spec_path,
+            "plan_path": plan_path,
+            "design_path": design_path,
         }
 
     def _extract_core_requirements(self, spec: Dict[str, Any]) -> List[CoreRequirement]:
@@ -278,7 +348,11 @@ class EngineerCore(BaseAgent):
 
         req_list = spec.get("requirements")
         if isinstance(req_list, list):
-            req_list_str: List[str] = [item for item in req_list if isinstance(item, str)]
+            req_list_str: List[str] = []
+            for _item in req_list:
+                _item = cast(Any, _item)
+                if isinstance(_item, str):
+                    req_list_str.append(_item)
             for i, req in enumerate(req_list_str):
                 requirements.append(
                     CoreRequirement(
@@ -305,7 +379,11 @@ class EngineerCore(BaseAgent):
                 text_content += f" {value}"
             elif isinstance(value, list):
                 for item in value:
-                    text_content += f" {item}"
+                    item = cast(Any, item)
+                    if isinstance(item, str):
+                        text_content += f" {item}"
+                    else:
+                        text_content += f" {str(item)}"
         text_content = text_content.lower()
         for concern, pattern in self.core_analysis_patterns.items():
             matches = re.findall(pattern, text_content)
@@ -396,6 +474,79 @@ class EngineerCore(BaseAgent):
             ]
         return components
 
+    def _plan_files_core(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a simple file plan (optionally via LLM) for downstream multi-file codegen."""
+        description = input_data.get('description', '')
+        analysis = input_data.get('analysis', {})
+        project_type = input_data.get('project_type', 'general')
+        nl_mode = bool(str(__import__('os').getenv('ORBITSUITE_NL_MODE', '0')) in ('1','true','True'))
+        base_plan: List[FilePlanEntry] = []
+        # Heuristic baseline
+        desc_l = description.lower()
+        # New: simple static landing page / web UI detection
+        if any(k in desc_l for k in (
+            'landing page', 'homepage', 'home page', 'hero section', 'html', 'css', 'web page', 'website', 'frontend', 'front-end', 'ui layout', 'static site'
+        )):
+            base_plan = [
+                {'path': 'index.html', 'purpose': 'Landing page markup with hero section linking CSS/JS', 'language': 'html'},
+                {'path': 'styles.css', 'purpose': 'Styling including gradient background and responsive layout', 'language': 'css'},
+                {'path': 'script.js', 'purpose': 'Client-side interactivity & DOM enhancements', 'language': 'javascript'},
+                {'path': 'server.py', 'purpose': 'Optional lightweight development server / future backend stub', 'language': 'python'},
+            ]
+        elif 'calculator' in desc_l:
+            base_plan = [
+                {'path': 'app/__init__.py', 'purpose': 'package init', 'language': 'python'},
+                {'path': 'app/eval.py', 'purpose': 'expression evaluation functions', 'language': 'python'},
+                {'path': 'app/gui.py', 'purpose': 'tkinter GUI (if needed)', 'language': 'python'},
+                {'path': 'app/cli.py', 'purpose': 'CLI argument parsing & entry', 'language': 'python'},
+                {'path': 'main.py', 'purpose': 'entry point orchestrating CLI/GUI', 'language': 'python'},
+            ]
+        else:
+            base_plan = [
+                {'path': 'main.py', 'purpose': 'primary entry point', 'language': 'python'},
+                {'path': 'app/core.py', 'purpose': 'core logic', 'language': 'python'},
+                {'path': 'app/utils.py', 'purpose': 'helpers', 'language': 'python'},
+            ]
+        if nl_mode:
+            try:
+                from .llm_provider import get_provider_from_env  # type: ignore
+                provider = get_provider_from_env()
+                messages = [
+                    {"role": "system", "content": "You design a concise file/module plan for a Python project. Output JSON list with objects {path,purpose,language}."},
+                    {"role": "user", "content": f"Project type: {project_type}. Description: {description}. Existing analysis summary keys: {list(analysis)[:6]}"}
+                ]
+                llm_out = provider.generate(messages)
+                if llm_out.strip().startswith('['):
+                    import json as _json
+                    ll_any = _json.loads(llm_out)
+                    if isinstance(ll_any, list) and ll_any:
+                        filtered: List[FilePlanEntry] = []
+                        for entry in ll_any:
+                            entry = cast(Dict[str, Any], entry)
+                            if isinstance(entry.get('path'), str):
+                                path_val = cast(Any, entry.get('path'))
+                                purpose_val = entry.get('purpose', '')
+                                lang_val = entry.get('language', 'python')
+                                fp: FilePlanEntry = {
+                                    'path': str(path_val),
+                                    'purpose': str(purpose_val),
+                                    'language': str(lang_val),
+                                }
+                                filtered.append(fp)
+                        if filtered:
+                            base_plan = filtered
+            except Exception:
+                pass
+        # Write plan artifact
+        out_dir = self._ensure_engineering_dir('plan')
+        import json as _json
+        plan_path = out_dir / 'file_plan.json'
+        try:
+            plan_path.write_text(_json.dumps(base_plan, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+        return {'success': True, 'plan': base_plan, 'plan_dir': str(out_dir)}
+
     def _analyze_requirements_core(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         requirements_text = input_data.get("requirements", "")
         if not requirements_text:
@@ -434,7 +585,13 @@ class EngineerCore(BaseAgent):
     def _recommend_core_technology_stack(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         project_type = input_data.get("project_type", "web_application")
         constraints_val = input_data.get("constraints", [])
-        constraints: List[str] = constraints_val if isinstance(constraints_val, list) else [str(constraints_val)]
+        if isinstance(constraints_val, list):
+            constraints: List[str] = []
+            for c in constraints_val:
+                c = cast(Any, c)
+                constraints.append(str(c))
+        else:
+            constraints = [str(constraints_val)]
         base_stack = self.core_technology_stacks.get(project_type, {})
         if not base_stack:
             return {
@@ -542,16 +699,17 @@ class EngineerCore(BaseAgent):
         for name, content in files.items():
             p = out_dir / name
             try:
-                if isinstance(content, (dict, list)):
+                serializable = self._to_jsonable(content)
+                if isinstance(serializable, (dict, list)):
                     p.write_text(
-                        json.dumps(self._to_jsonable(content), indent=2, ensure_ascii=False),
+                        json.dumps(serializable, indent=2, ensure_ascii=False),
                         encoding="utf-8",
                     )
                 else:
-                    p.write_text(str(content), encoding="utf-8")
+                    p.write_text(str(serializable), encoding="utf-8")
                 written.append(str(p))
-            except Exception as e:
-                print(f"EngineerCore artifact write failed for {p}: {e}")
+            except Exception as e:  # pragma: no cover - best effort
+                print(f"[EngineerCore] artifact write failed for {p}: {e}")
         return written
 
     def _render_summary_md(self, summary: Dict[str, Any]) -> str:
@@ -572,22 +730,30 @@ class EngineerCore(BaseAgent):
         return "\n".join(lines)
 
     def _to_jsonable(self, obj: Any) -> Any:
-        """Recursively convert dataclasses and complex types into JSON-serializable forms."""
-        # Dataclass instance only (asdict requires an instance, not a class)
+        """Recursively convert dataclasses / iterables while preserving primitive types."""
         if is_dataclass(obj) and not isinstance(obj, type):
-            return {k: self._to_jsonable(v) for k, v in asdict(obj).items()}
-        # Mappings
+            out_dict: Dict[str, Any] = {}
+            for k, v in asdict(obj).items():
+                out_dict[str(cast(Any, k))] = self._to_jsonable(v)
+            return out_dict
         if isinstance(obj, dict):
-            return {k: self._to_jsonable(v) for k, v in obj.items()}
-        # Iterables
+            norm: Dict[str, Any] = {}
+            for k, v in obj.items():
+                k = cast(Any, k)
+                v = cast(Any, v)
+                norm[str(k)] = self._to_jsonable(v)
+            return norm
         if isinstance(obj, (list, tuple, set)):
-            return [self._to_jsonable(v) for v in obj]
-        # Primitive or already JSON-serializable
+            out_list: List[Any] = []
+            for v in obj:
+                v = cast(Any, v)
+                out_list.append(self._to_jsonable(v))
+            return out_list
+        # Attempt JSON serialization; fallback to repr
         try:
             json.dumps(obj)
             return obj
         except Exception:
-            # Best-effort fallback to a stable string form
             return repr(obj)
 
 
