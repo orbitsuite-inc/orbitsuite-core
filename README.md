@@ -32,17 +32,6 @@ Open-core agentic runtime for software development automation. Supervisor → Or
 
 ---
 
-## Why OrbitSuite Core
-
-- **Minimal by design**: single‑shot task execution with a straightforward control flow.
-- **Composable agents**: Task Linguist → CodeGen → Engineer → Tester → Patcher → Memory (basic).
-- **Fast start**: OpenAI‑only; no local model or GPU setup. Two demo calls via relay, then paste your key.
-- **Clear upgrade path**: when you need advanced memory, logging, retries, advanced routing/fallbacks, or fleet orchestration, Pro/Enterprise unlocks it without changing your workflows.
-
-> Core intentionally omits logging systems, retries, fallbacks, log rotation, webhooks, autosync, and local LLMs. It’s a starter experience.
-
----
-
 ## Quickstart
 
 ### Windows (1‑click binary)
