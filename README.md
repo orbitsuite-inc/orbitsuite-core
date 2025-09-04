@@ -1,4 +1,5 @@
-# OrbitS## Why OrbitSuite Core
+# OrbitSuite 
+# Why OrbitSuite Core
 
 - **Minimal by design**: single‑shot task execution with a straightforward cont## What's in Core
 
